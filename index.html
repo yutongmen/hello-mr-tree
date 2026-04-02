@@ -1,0 +1,1877 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>你好树先生 - Hello Mr. Tree</title>
+<style>
+  @font-face {
+    font-family: 'Zpix';
+    src: url('https://cdn.jsdelivr.net/gh/SolidZORO/zpix-pixel-font@2.2/dist/Zpix.woff2') format('woff2');
+    font-display: swap;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #111;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Zpix', monospace;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="warning" style="display:none;position:absolute;top:10px;left:10px;background:#d32f2f;color:#fff;padding:10px 15px;border-radius:4px;font-size:12px;max-width:400px;z-index:100;"></div>
+<script>
+// Check if running from file:// protocol
+if (window.location.protocol === 'file:') {
+  const warning = document.getElementById('warning');
+  warning.style.display = 'block';
+  warning.innerHTML = '⚠️ 请使用本地服务器打开此页面，否则AI功能无法使用<br>命令: <code>python3 -m http.server 8080</code> 然后访问 <code>http://localhost:8080</code>';
+  console.error('[Error] Running from file:// protocol. API calls will fail due to browser security restrictions.');
+}
+'use strict';
+
+// ============================================================
+// SECTION 1: CONSTANTS & CONFIGURATION
+// ============================================================
+const BASE_W = 480;
+const BASE_H = 320;
+const GROUND_Y = 278;
+const TREE_CX = 240;
+const TREE_BASE_Y = GROUND_Y;
+const TREE_BRANCH_Y = 218;
+
+const SEASON_ANIMALS = { spring: 'bird', summer: 'butterfly', autumn: 'squirrel', winter: 'rabbit' };
+const WEATHER_LIST = ['clear', 'cloudy', 'rain', 'snow', 'fog', 'windy'];
+const SEASON_LIST = ['spring', 'summer', 'autumn', 'winter'];
+const MAX_PARTICLES = 200;
+
+const TIMINGS = {
+  normal: { quiet: 1200, enter: 3.5, chat: 5, exit: 3.5, think: 8, cooldown: 3 },
+  demo:   { quiet: 20,   enter: 2,   chat: 3.5, exit: 2,   think: 5, cooldown: 2 }
+};
+
+// LLM API Configuration (DashScope / OpenAI-compatible)
+const LLM_CONFIG = {
+  apiKey: 'sk-fc1a606b95c04ffd9a428ca41c5e33b3',
+  baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  model: 'qwen3.5-flash',
+  cityName: '上海',           // 用于天气查询
+  enableSearch: true,         // 开启联网搜索
+};
+
+// ============================================================
+// SECTION 2: SEASON CONFIGURATION
+// ============================================================
+const SEASON_CONFIG = {
+  spring: {
+    sky: { day: ['#87CEEB','#D6EEFF'], dawn: ['#FFB6C1','#FFDAB9'], dusk: ['#F4A6B0','#FFCBA4'], night: ['#0B0B3B','#1A1A4E'] },
+    ground: '#5B8C3A', groundAlt: '#4A7A2E', hill: '#6B9E4A',
+    canopy: ['#4CAF50','#66BB6A','#81C784','#A5D6A7'], leafDensity: 0.72,
+    trunk: '#8D9E82', trunkAlt: '#A7B89A', trunkDark: '#6B7D62',
+    flowers: '#F8BBD0', flowerAlt: '#F48FB1', hasFlowers: true,
+    snowBranch: false, particle: 'petals',
+    grassColors: ['#6BAF4A','#5B9C3A','#4D8830'],
+    animalNames: ['小鸟A', '小鸟B']
+  },
+  summer: {
+    sky: { day: ['#4AA3DF','#87CEEB'], dawn: ['#FF8C42','#FFD700'], dusk: ['#E07040','#FFB347'], night: ['#0A0A2E','#151544'] },
+    ground: '#4A7A2E', groundAlt: '#3D6B24', hill: '#5B8C3A',
+    canopy: ['#2E7D32','#388E3C','#43A047','#4CAF50'], leafDensity: 1.0,
+    trunk: '#8D9E82', trunkAlt: '#A7B89A', trunkDark: '#6B7D62',
+    hasFlowers: false, snowBranch: false, particle: null,
+    grassColors: ['#3D7828','#4A8A2E','#3C6B22'],
+    animalNames: ['蝴蝶A', '蝴蝶B']
+  },
+  autumn: {
+    sky: { day: ['#87ACCE','#D4C4A4'], dawn: ['#E07040','#FFB347'], dusk: ['#C05030','#E09040'], night: ['#0D0D35','#1C1C50'] },
+    ground: '#9E8C5A', groundAlt: '#8B7A4A', hill: '#A08050',
+    canopy: ['#E65100','#F57C00','#FFB300','#D84315','#BF360C','#FF8F00'], leafDensity: 0.48,
+    trunk: '#8D9080', trunkAlt: '#A0A090', trunkDark: '#6B7060',
+    hasFlowers: false, snowBranch: false, particle: 'leaves',
+    grassColors: ['#A09050','#8C7E48','#B0A060'],
+    animalNames: ['松鼠A', '松鼠B']
+  },
+  winter: {
+    sky: { day: ['#B0BEC5','#CFD8DC'], dawn: ['#CE93D8','#F0BBD0'], dusk: ['#9575CD','#CE93D8'], night: ['#0A0A20','#1A1A35'] },
+    ground: '#D8D8D8', groundAlt: '#C8C8C8', hill: '#C0C8CC',
+    canopy: ['#5D4037','#6D4C41','#795548'], leafDensity: 0.0,
+    trunk: '#7B8B78', trunkAlt: '#909E8C', trunkDark: '#5A6A58',
+    hasFlowers: false, snowBranch: true, particle: null,
+    grassColors: [],
+    animalNames: ['雪兔A', '雪兔B']
+  }
+};
+
+// ============================================================
+// SECTION 3: MOCK DIALOGUE DATA (two animals chatting)
+// ============================================================
+// chat entries: [speakerIndex, text] where 0=animalLeft, 1=animalRight
+// tree only observes, then gives a "think" summary
+const DIALOGUE = {
+  spring: [
+    { greet: [0, '嘿！你看树先生的新叶子！'],
+      greetReply: [1, '真的！嫩绿嫩绿的，好漂亮~'],
+      chat: [
+        [0, '我在南边看到一片油菜花田！'],
+        [1, '真的吗？那一定很壮观吧！'],
+        [0, '金灿灿的一大片，蜜蜂可多了。'],
+        [1, '好想去看！明天你带我去好不好？'],
+        [0, '好呀！起飞前在树先生这里集合~'],
+        [1, '一言为定！']
+      ],
+      bye: [0, '那我先去找虫子吃啦，明天见！'],
+      byeReply: [1, '拜拜！我再晒会儿太阳~'],
+      think: '它们约好明天去看油菜花……春天就该这样，到处都去走走。' },
+    { greet: [1, '叽叽！你今天从哪儿飞回来的？'],
+      greetReply: [0, '从河边！那边柳树都发芽啦！'],
+      chat: [
+        [1, '河边是不是有很多小鱼？'],
+        [0, '有！不过我又抓不到，哈哈。'],
+        [1, '你又不是翠鸟，别难为自己啦。'],
+        [0, '也是。树先生的花瓣掉了好多呢。'],
+        [1, '落花不是结束，是果实的开始嘛。'],
+        [0, '你说得好有道理！']
+      ],
+      bye: [1, '我要去筑巢了，趁天还亮！'],
+      byeReply: [0, '加油！我帮你找软草去！'],
+      think: '落花纷纷……它们说得对，这是新果实的序章。' },
+    { greet: [0, '哇，今天风好舒服~'],
+      greetReply: [1, '对呀！树先生的叶子都在跳舞呢！'],
+      chat: [
+        [0, '你有没有发现最近虫子变多了？'],
+        [1, '春天嘛，大家都出来活动了。'],
+        [0, '我刚才一口气吃了五只！'],
+        [1, '你也太能吃了吧……'],
+        [0, '飞一天很累的好不好！'],
+        [1, '哈哈好吧，你开心就好~']
+      ],
+      bye: [0, '吃饱了，我去树先生枝头午睡~'],
+      byeReply: [1, '那我也去另一根枝上歇着！'],
+      think: '两只小鸟在我枝头午睡……轻轻的，暖暖的。' }
+  ],
+  summer: [
+    { greet: [0, '好热啊！树先生的树荫真凉快！'],
+      greetReply: [1, '可不是嘛！外面太阳晒得翅膀都烫了。'],
+      chat: [
+        [0, '你刚从哪个花园来的？'],
+        [1, '东边那个！玫瑰开得可好了。'],
+        [0, '我更喜欢薰衣草，颜色好看。'],
+        [1, '各有各的美嘛~树先生你说对吧？'],
+        [0, '哈哈树先生才不管我们聊什么呢。'],
+        [1, '他只是不爱说话，心里都听着呢。']
+      ],
+      bye: [0, '凉快够了，我继续去采蜜~'],
+      byeReply: [1, '我也走啦！晚些再来乘凉！'],
+      think: '它们说我只是不爱说话……嗯，沉默也是一种陪伴吧。' },
+    { greet: [1, '你看你看！我的翅膀花纹变了！'],
+      greetReply: [0, '真的耶！比之前更漂亮了！'],
+      chat: [
+        [1, '刚从蛹里出来的时候好迷茫。'],
+        [0, '我也是！什么都不记得了。'],
+        [1, '但是第一次飞起来超开心的！'],
+        [0, '对对对！风吹在翅膀上的感觉！'],
+        [1, '感觉整个世界都是我们的。'],
+        [0, '虽然只有短短一个夏天……']
+      ],
+      bye: [1, '别想那么多啦！活在当下！'],
+      byeReply: [0, '说得对！走，去花丛里玩！'],
+      think: '短短一个夏天……但它们飞翔时的快乐是真实的。' },
+    { greet: [0, '感觉要下雨了，空气黏黏的。'],
+      greetReply: [1, '是啊……快飞不动了。'],
+      chat: [
+        [0, '先在树先生这里避一避吧。'],
+        [1, '好主意。上次淋雨翅膀差点废了。'],
+        [0, '我记得！你在叶子下躲了好久。'],
+        [1, '树先生的叶子真的很管用呢。'],
+        [0, '相当于一把天然大伞！'],
+        [1, '谢谢你呀树先生！']
+      ],
+      bye: [0, '雨好像没下，我先走啦！'],
+      byeReply: [1, '我再等等……万一下了呢。'],
+      think: '它们来避雨……能为小生命遮风挡雨，是我的荣幸。' }
+  ],
+  autumn: [
+    { greet: [0, '树先生的叶子变颜色啦！好好看！'],
+      greetReply: [1, '金色的！我想收集几片装饰窝！'],
+      chat: [
+        [0, '你的橡果存够了吗？'],
+        [1, '差不多了！藏了三个地方。'],
+        [0, '我只藏了两个地方……会不会不够？'],
+        [1, '那你赶紧多存点！冬天可长着呢。'],
+        [0, '你说……树先生冬天会不会寂寞？'],
+        [1, '他有根在泥土里，应该还好吧。']
+      ],
+      bye: [0, '走啦！再去找几颗橡果！'],
+      byeReply: [1, '我也去！看谁找得多！'],
+      think: '它们问我会不会寂寞……冬天虽冷，但根在泥土里，一直很暖。' },
+    { greet: [1, '快看！我找到了一颗超大的橡果！'],
+      greetReply: [0, '哇！这是我见过最大的！'],
+      chat: [
+        [1, '藏在树先生的根旁边安全吗？'],
+        [0, '应该很安全，没人会来翻的。'],
+        [1, '那就拜托树先生帮忙看着啦。'],
+        [0, '你每次都把好东西放这里，哈哈。'],
+        [1, '因为树先生最可靠呀！'],
+        [0, '嗯嗯，我也这么觉得！']
+      ],
+      bye: [1, '还要再去找几颗！比赛开始！'],
+      byeReply: [0, '等等我！别跑那么快！'],
+      think: '它们把宝贝橡果藏在我根旁……被信任的感觉，比秋阳还暖。' },
+    { greet: [0, '呼……跑得好累！有只猫在后面追！'],
+      greetReply: [1, '快爬上来！树先生会保护我们的！'],
+      chat: [
+        [0, '好可怕！那只猫好大只！'],
+        [1, '别怕别怕，它爬不上来的。'],
+        [0, '树先生的树皮太滑了，哈哈！'],
+        [1, '这就是住在树旁边的好处~'],
+        [0, '看！猫走了！'],
+        [1, '太好了！树先生真是安全堡垒！']
+      ],
+      bye: [0, '猫走远了，溜了溜了！'],
+      byeReply: [1, '小心点！别再被追了！'],
+      think: '又帮它们躲过一劫……保护小生命们，是老树的本分。' }
+  ],
+  winter: [
+    { greet: [0, '好冷啊……树先生你不冷吗？叶子都掉光了。'],
+      greetReply: [1, '他的根在泥土里呢，应该还暖和。'],
+      chat: [
+        [0, '我穿了厚厚的冬毛，暖和得很！'],
+        [1, '我也是！白色的毛超保暖。'],
+        [0, '不过在雪地里都找不到你了。'],
+        [1, '这叫保护色！很有用的！'],
+        [0, '嘿嘿，我们躲在树先生旁边最安全。'],
+        [1, '对！这里风也小一些。']
+      ],
+      bye: [0, '雪下大了，回洞里啦！'],
+      byeReply: [1, '春天再来找树先生玩！拜拜！'],
+      think: '它们说春天再来……好，我在这里等着。每个冬天都会过去的。' },
+    { greet: [1, '下雪了！好开心！来打雪仗！'],
+      greetReply: [0, '你打不过我的！我跳得远！'],
+      chat: [
+        [1, '看我！在雪地里打滚！'],
+        [0, '哈哈哈你变成雪球了！'],
+        [1, '白上加白，完美伪装！'],
+        [0, '树先生身上也积了好多雪。'],
+        [1, '他穿了件白大衣，好帅！'],
+        [0, '哈哈对！雪做的大衣！']
+      ],
+      bye: [1, '玩累了，去找点干草吃。'],
+      byeReply: [0, '我也饿了！一起去吧！'],
+      think: '它们说我穿了雪做的大衣……呵，冬天偶尔也有这样的乐趣。' },
+    { greet: [0, '我给树先生带了个礼物！'],
+      greetReply: [1, '什么什么？让我也看看！'],
+      chat: [
+        [0, '一颗冻梅果！小小的但很甜！'],
+        [1, '哇好香！我也想要一颗！'],
+        [0, '你的在这里！我找了两颗！'],
+        [1, '耶！谢谢你！那树先生的呢？'],
+        [0, '放在他根旁边了，给他留着。'],
+        [1, '树先生一定很高兴的！']
+      ],
+      bye: [0, '天快黑了，回去啦！'],
+      byeReply: [1, '明天还来看树先生！保重！'],
+      think: '它们带来了梅果……最冷的日子里，最暖的是心意。' }
+  ]
+};
+
+// ============================================================
+// SECTION 4: SPRITE DATA
+// ============================================================
+const SP = {};
+
+// Bird sprites (12x10)
+const BIRD_PAL = { B:'#8D6E63', D:'#5D4037', O:'#FFCC80', e:'#212121', k:'#FFB300', f:'#BF360C', L:'#A1887F' };
+const BIRD_IDLE_0 = [
+  '............', '....BB......', '...BBBB.....',
+  '..BBBBBk....', '.BBeBBBDD...', '.BBBBBBDDD..',
+  '..BOOBBD....', '...BBBB.....', '....ff......', '....f.f.....'
+];
+const BIRD_IDLE_1 = [
+  '............', '....BB......', '...BBBB.....',
+  '..BBBBBk....', '.BBeBBBD....', '.BBBBBBD.D..',
+  '..BOOBBD....', '...BBBB.....', '....ff......', '....f.f.....'
+];
+const BIRD_FLY_0 = [
+  '............', '..D....D....', '..DB..BD....', '..DBBBD.....',
+  '..BBBBBk....', '.BBeBBBB....', '.BBOBBB.....',
+  '..BBBB......', '............', '............'
+];
+const BIRD_FLY_1 = [
+  '............', '............', '..DBBBD.....',
+  '..BBBBBk....', '.BBeBBBB....', '.BBOBBB.....',
+  '..DBBB......', '..D..D......', '............', '............'
+];
+
+// Bird B variant (slightly different color)
+const BIRD_B_PAL = { B:'#A1887F', D:'#6D4C41', O:'#FFE0B2', e:'#212121', k:'#FFC107', f:'#795548', L:'#BCAAA4' };
+
+// Butterfly sprites (12x10)
+const BFLY_PAL = { W:'#7B1FA2', w:'#CE93D8', D:'#FFD54F', B:'#3E2723', A:'#5D4037', P:'#AB47BC' };
+const BFLY_IDLE_0 = [
+  '..A......A..', '..W......W..', '.WWD....DWW.',
+  'WWWW....WWWW', '.WwWW..WWwW.', '..WWWBBWWW..',
+  '...WWBBWW...', '....WBBW....', '.....BB.....', '............'
+];
+const BFLY_IDLE_1 = [
+  '............', '..A......A..', '..WD....DW..',
+  '..WW....WW..', '..WwW..WwW..', '...WWBBWW...',
+  '....WBBW....', '.....BB.....', '.....BB.....', '............'
+];
+
+// Butterfly B variant
+const BFLY_B_PAL = { W:'#1565C0', w:'#64B5F6', D:'#FFD54F', B:'#3E2723', A:'#5D4037', P:'#42A5F5' };
+
+// Squirrel sprites (14x12)
+const SQ_PAL = { B:'#8D6E63', D:'#6D4C41', V:'#FFCC80', e:'#212121', n:'#4E342E', T:'#795548', H:'#A1887F', f:'#6D4C41' };
+const SQ_IDLE_0 = [
+  '..........TT..', '.........TTT..', '........TTTT..',
+  '.......TTTTT..', '......TTTT....', '.HBBBBBB......',
+  '.BBeVBBn......', '.BBBBB........', '.BVVBB........',
+  '.BBBB.........', '..ff.ff.......', '..............'
+];
+const SQ_IDLE_1 = [
+  '..........TT..', '.........TTT..', '........TTTTT.',
+  '.......TTTTT..', '......TTTT....', '.HBBBBBB......',
+  '.BBeVBBn......', '.BBBBBn.......', '.BVVBB........',
+  '.BBBB.........', '..ff.ff.......', '..............'
+];
+const SQ_RUN_0 = [
+  '..........TT..', '.........TTT..', '........TTTT..',
+  '.......TTTT...', '......TTTT....', '..BBBBBBB.....',
+  '..BBeBBBn.....', '..BBBBB.......', '..BVBB........',
+  '..B..B........', '.f....f.......', '..............'
+];
+const SQ_RUN_1 = [
+  '..........TT..', '.........TTT..', '........TTTT..',
+  '.......TTTT...', '......TTTT....', '..BBBBBBB.....',
+  '..BBeBBBn.....', '..BBBBB.......', '..BVBB........',
+  '...BB.........', '..f..f........', '..............'
+];
+
+// Squirrel B variant
+const SQ_B_PAL = { B:'#A1887F', D:'#795548', V:'#FFE0B2', e:'#212121', n:'#5D4037', T:'#8D6E63', H:'#BCAAA4', f:'#795548' };
+
+// Rabbit sprites (14x12)
+const RB_PAL = { B:'#F5F5F5', S:'#E0E0E0', P:'#F48FB1', e:'#D32F2F', n:'#F48FB1', E:'#EEEEEE' };
+const RB_IDLE_0 = [
+  '..EE..EE......', '..EP..PE......', '..BBBBBB......',
+  '.BBBBBBB......', '.BBeBBBn......', '.BBBBBBBB.....',
+  '.BBBBBBB......', '..BSSBSS......', '...BB.BB......',
+  '..............', '..............', '..............'
+];
+const RB_IDLE_1 = [
+  '..EE...EE.....', '..EP...PE.....', '..BBBBBB......',
+  '.BBBBBBB......', '.BBeBBBn......', '.BBBBBBBB.....',
+  '.BBBBBBB......', '..BSSBSS......', '...BB.BB......',
+  '..............', '..............', '..............'
+];
+const RB_HOP_0 = [
+  '..EE..EE......', '..EP..PE......', '..BBBBBB......',
+  '.BBBBBBB......', '.BBeBBBn......', '.BBBBBBBB.....',
+  '..BBBBBBB.....', '...BSSBS......', '...BB..BB.....',
+  '..............', '..............', '..............'
+];
+const RB_HOP_1 = [
+  '..EE..EE......', '..EP..PE......', '...BBBBB......',
+  '..BBBBBBB.....', '..BBeBBBn.....', '..BBBBBBB.....',
+  '..BBBBBBB.....', '....BSSB......', '..BB....BB....',
+  '..............', '..............', '..............'
+];
+
+// Rabbit B variant
+const RB_B_PAL = { B:'#E8E8E8', S:'#BDBDBD', P:'#CE93D8', e:'#7B1FA2', n:'#CE93D8', E:'#D5D5D5' };
+
+function parseSprite(lines, pal) {
+  return lines.map(row => [...row].map(c => c === '.' ? null : (pal[c] || null)));
+}
+
+function initSprites() {
+  SP.bird = { idle: [parseSprite(BIRD_IDLE_0, BIRD_PAL), parseSprite(BIRD_IDLE_1, BIRD_PAL)],
+              move: [parseSprite(BIRD_FLY_0, BIRD_PAL), parseSprite(BIRD_FLY_1, BIRD_PAL)] };
+  SP.bird_b = { idle: [parseSprite(BIRD_IDLE_0, BIRD_B_PAL), parseSprite(BIRD_IDLE_1, BIRD_B_PAL)],
+                move: [parseSprite(BIRD_FLY_0, BIRD_B_PAL), parseSprite(BIRD_FLY_1, BIRD_B_PAL)] };
+  SP.butterfly = { idle: [parseSprite(BFLY_IDLE_0, BFLY_PAL), parseSprite(BFLY_IDLE_1, BFLY_PAL)],
+                   move: [parseSprite(BFLY_IDLE_0, BFLY_PAL), parseSprite(BFLY_IDLE_1, BFLY_PAL)] };
+  SP.butterfly_b = { idle: [parseSprite(BFLY_IDLE_0, BFLY_B_PAL), parseSprite(BFLY_IDLE_1, BFLY_B_PAL)],
+                     move: [parseSprite(BFLY_IDLE_0, BFLY_B_PAL), parseSprite(BFLY_IDLE_1, BFLY_B_PAL)] };
+  SP.squirrel = { idle: [parseSprite(SQ_IDLE_0, SQ_PAL), parseSprite(SQ_IDLE_1, SQ_PAL)],
+                  move: [parseSprite(SQ_RUN_0, SQ_PAL), parseSprite(SQ_RUN_1, SQ_PAL)] };
+  SP.squirrel_b = { idle: [parseSprite(SQ_IDLE_0, SQ_B_PAL), parseSprite(SQ_IDLE_1, SQ_B_PAL)],
+                    move: [parseSprite(SQ_RUN_0, SQ_B_PAL), parseSprite(SQ_RUN_1, SQ_B_PAL)] };
+  SP.rabbit = { idle: [parseSprite(RB_IDLE_0, RB_PAL), parseSprite(RB_IDLE_1, RB_PAL)],
+                move: [parseSprite(RB_HOP_0, RB_PAL), parseSprite(RB_HOP_1, RB_PAL)] };
+  SP.rabbit_b = { idle: [parseSprite(RB_IDLE_0, RB_B_PAL), parseSprite(RB_IDLE_1, RB_B_PAL)],
+                  move: [parseSprite(RB_HOP_0, RB_B_PAL), parseSprite(RB_HOP_1, RB_B_PAL)] };
+}
+
+// ============================================================
+// SECTION 4.5: LLM API INTEGRATION
+// ============================================================
+async function callLLM(messages, { search = false, temperature = 0.8, maxTokens = 400 } = {}) {
+  const body = {
+    model: LLM_CONFIG.model,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    enable_thinking: false,
+    stream: false
+  };
+  if (search && LLM_CONFIG.enableSearch) body.enable_search = true;
+
+  const resp = await fetch(`${LLM_CONFIG.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${LLM_CONFIG.apiKey}`
+    },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`LLM ${resp.status}: ${resp.statusText}`);
+  const data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+function extractJSON(text) {
+  // Try markdown code block first
+  const m1 = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (m1) try { return JSON.parse(m1[1].trim()); } catch(e) {}
+  // Try direct parse
+  try { return JSON.parse(text.trim()); } catch(e) {}
+  // Try to find JSON object in text
+  const m2 = text.match(/\{[\s\S]*\}/);
+  if (m2) return JSON.parse(m2[0]);
+  throw new Error('Cannot extract JSON');
+}
+
+// --- Weather via LLM ---
+async function fetchWeather() {
+  try {
+    console.log('[Weather] Fetching...');
+    const content = await callLLM([
+      { role: 'user', content: `请搜索${LLM_CONFIG.cityName}现在的实时天气情况。只返回一个JSON，不要返回任何其他内容，格式如下：
+{"weather":"clear","temp":25}
+weather字段必须且只能是以下英文单词之一：clear（晴天）、cloudy（多云或阴天）、rain（雨天）、snow（下雪）、fog（雾或霾）、windy（大风）。temp是当前温度的数字。` }
+    ], { search: true, temperature: 0, maxTokens: 80 });
+
+    const data = extractJSON(content);
+    if (data.weather && WEATHER_LIST.includes(data.weather)) {
+      currentWeather = data.weather;
+      particles = [];
+      console.log('[Weather] Updated:', data);
+    }
+  } catch (e) {
+    console.warn('[Weather] Failed:', e.message);
+  }
+}
+
+// --- News dialogue via LLM ---
+const ANIMAL_TYPE_NAMES = { spring: '小鸟', summer: '蝴蝶', autumn: '松鼠', winter: '雪兔' };
+
+async function fetchNewsDialogue(season) {
+  const animalType = ANIMAL_TYPE_NAMES[season];
+  const nameA = animalType + '甲';
+  const nameB = animalType + '乙';
+
+  console.log('[Dialogue] Fetching news for', season, '...');
+  const content = await callLLM([
+    { role: 'system', content: `你是一个创意对话写作助手。你需要为一个像素风桌面摆件写两只${animalType}的对话。它们住在一棵老梧桐树旁，名字叫${nameA}和${nameB}。` },
+    { role: 'user', content: `请先搜索今天最新的1-2条热点新闻，然后创作一段${nameA}和${nameB}讨论这些新闻的对话。
+
+要求：
+- 口语化、活泼可爱，每句话25-50个字，不要太短
+- 用动物的视角聊新闻，不要像播新闻稿
+- 像两个好朋友自然聊天，内容可以稍微展开一点
+
+请严格按以下JSON格式返回，不要有任何多余文字：
+{
+  "greet": "${nameA}的打招呼",
+  "greetReply": "${nameB}的回应",
+  "chat": [
+    ["${nameA}说的话", "${nameB}说的话"],
+    ["${nameA}说的话", "${nameB}说的话"],
+    ["${nameA}说的话", "${nameB}说的话"],
+    ["${nameA}说的话", "${nameB}说的话"]
+  ],
+  "bye": "${nameA}的告别",
+  "byeReply": "${nameB}的回应",
+  "newsTopics": "用一句话概括聊了什么新闻"
+}` }
+  ], { search: true, temperature: 0.85, maxTokens: 800 });
+
+  const data = extractJSON(content);
+
+  // Validate structure
+  if (!data.greet || !data.chat || !Array.isArray(data.chat) || data.chat.length < 1) {
+    throw new Error('Invalid dialogue structure');
+  }
+
+  // Transform to internal format: chat pairs -> flat [speaker, text] array
+  const chatFlat = [];
+  for (const pair of data.chat) {
+    if (Array.isArray(pair) && pair.length >= 2) {
+      chatFlat.push([0, String(pair[0])]);
+      chatFlat.push([1, String(pair[1])]);
+    }
+  }
+
+  return {
+    greet: [0, String(data.greet)],
+    greetReply: [1, String(data.greetReply || '嗯嗯！')],
+    chat: chatFlat,
+    bye: [0, String(data.bye || '走啦！下次见！')],
+    byeReply: [1, String(data.byeReply || '拜拜~')],
+    think: '', // will be fetched separately
+    newsTopics: String(data.newsTopics || '')
+  };
+}
+
+// --- Tree summary via LLM ---
+async function fetchTreeSummary(newsTopics) {
+  console.log('[Summary] Fetching...');
+  const content = await callLLM([
+    { role: 'system', content: '你是一棵有着百年历史的老梧桐树，性格沉稳温和，富有哲思。你只说一句话来做内心独白。' },
+    { role: 'user', content: `刚才两只小动物在你旁边聊了这些事：${newsTopics}\n\n请用一句话做你的内心感悟（15-35字），风格是老树的沉思，温暖或感慨或幽默皆可。只返回这一句话本身，不要加引号或其他任何内容。` }
+  ], { temperature: 0.9, maxTokens: 80 });
+  return content.trim().replace(/^["'"""''【】\s]+|["'"""''【】\s]+$/g, '');
+}
+
+// --- LLM dialogue cache management ---
+// Called from game loop; fetches dialogues during idle time
+function updateLLMCache() {
+  console.log('[Cache] updateLLMCache called, apiKey:', !!LLM_CONFIG.apiKey, 'busy:', llmBusy, 'cache:', llmCache.length, 'state:', smState, 'time:', gameTime, 'lastFetch:', llmLastFetchTime);
+  if (!LLM_CONFIG.apiKey) { console.log('[Cache] No API key, skipping'); return; }
+  if (llmBusy) { console.log('[Cache] Already busy, skipping'); return; }
+
+  // If season changed, invalidate cache
+  if (llmCacheSeason && llmCacheSeason !== currentSeason) {
+    llmCache = [];
+    llmCacheSeason = '';
+    console.log('[Cache] Season changed, cache cleared');
+  }
+
+  // Don't fetch if cache is full
+  if (llmCache.length >= LLM_CACHE_MAX) { console.log('[Cache] Cache full, skipping'); return; }
+
+  // Respect cooldown between fetches
+  const timeSinceLast = gameTime - llmLastFetchTime;
+  if (timeSinceLast < LLM_FETCH_COOLDOWN) { console.log('[Cache] Cooldown active:', timeSinceLast.toFixed(1), 's <', LLM_FETCH_COOLDOWN); return; }
+
+  // Only fetch during idle states (not during active dialogue)
+  const idleStates = ['QUIET', 'COOLDOWN'];
+  if (!idleStates.includes(smState)) { console.log('[Cache] Not idle state:', smState); return; }
+
+  llmBusy = true;
+  llmLastFetchTime = gameTime;
+  const fetchSeason = currentSeason; // capture season at fetch time
+  console.log('[Cache] Fetching dialogue for', fetchSeason, '(cache:', llmCache.length + '/' + LLM_CACHE_MAX + ')');
+
+  fetchNewsDialogue(fetchSeason).then(data => {
+    if (data && currentSeason === fetchSeason) {
+      llmCacheSeason = fetchSeason;
+      llmCache.push(data);
+      console.log('[Cache] Stored! Cache size:', llmCache.length);
+    }
+  }).catch(e => {
+    console.warn('[Cache] Fetch failed:', e.message);
+  }).finally(() => { llmBusy = false; });
+}
+
+// ============================================================
+// SECTION 5: UTILITY FUNCTIONS
+// ============================================================
+function hexToRgb(h) {
+  return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+}
+function rgbToHex(r,g,b) {
+  return '#' + [r,g,b].map(v => Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}
+function lerpColor(a,b,t) {
+  const [r1,g1,b1] = hexToRgb(a), [r2,g2,b2] = hexToRgb(b);
+  return rgbToHex(r1+(r2-r1)*t, g1+(g2-g1)*t, b1+(b2-b1)*t);
+}
+function darkenColor(hex, amt) {
+  const [r,g,b] = hexToRgb(hex);
+  return rgbToHex(r*(1-amt), g*(1-amt), b*(1-amt));
+}
+function seededRand(seed) {
+  let x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// ============================================================
+// SECTION 6: CANVAS SETUP & SCALING
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let scale = 1;
+
+function calcScale() {
+  scale = Math.max(1, Math.min(
+    Math.floor(window.innerWidth / BASE_W),
+    Math.floor(window.innerHeight / BASE_H)
+  ));
+  canvas.width = BASE_W * scale;
+  canvas.height = BASE_H * scale;
+  ctx.imageSmoothingEnabled = false;
+}
+
+function drawPixel(x, y, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x) * scale, Math.floor(y) * scale, scale, scale);
+}
+function drawRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x) * scale, Math.floor(y) * scale, Math.ceil(w) * scale, Math.ceil(h) * scale);
+}
+function drawSprite(data, px, py, flipH) {
+  for (let r = 0; r < data.length; r++) {
+    const row = data[r];
+    for (let c = 0; c < row.length; c++) {
+      if (row[c]) {
+        const x = flipH ? (px + row.length - 1 - c) : (px + c);
+        drawPixel(x, py + r, row[c]);
+      }
+    }
+  }
+}
+
+window.addEventListener('resize', () => { calcScale(); regenerateTree(); });
+
+// ============================================================
+// SECTION 7: GAME STATE
+// ============================================================
+let currentSeason = 'spring';
+let currentWeather = 'clear';
+let isDemo = false;
+let seasonOverride = false;
+let gameTime = 0;
+
+// State machine
+let smState = 'QUIET';
+let smTimer = 0;
+// Two animals
+let animalLeft = null;   // enters from left
+let animalRight = null;  // enters from right
+let currentDlg = null;
+let chatIdx = 0;
+let activeBubble = null;
+let dlgPhase = '';
+
+// LLM cache system — pre-fetch dialogues during idle time
+const LLM_CACHE_MAX = 3;           // max cached dialogues
+const LLM_FETCH_COOLDOWN = 12;     // seconds between cache fetches
+let llmCache = [];                  // queue of pre-fetched dialogues
+let llmCacheSeason = '';            // which season the cache was built for
+let llmLastFetchTime = -9999;       // last fetch timestamp (gameTime)
+let llmBusy = false;                // prevent concurrent fetches
+let currentNewsTopics = '';         // topic for tree summary
+let llmSummaryText = '';            // resolved LLM tree summary
+let lastWeatherFetch = -9999;       // force initial fetch
+
+// Particles
+let particles = [];
+
+// Clouds
+let clouds = [];
+
+// Stars
+const stars = [];
+for (let i = 0; i < 50; i++) {
+  stars.push({
+    x: Math.floor(seededRand(i * 7 + 3) * BASE_W),
+    y: Math.floor(seededRand(i * 13 + 7) * BASE_H * 0.45),
+    phase: seededRand(i * 3 + 11) * Math.PI * 2,
+    bright: 0.4 + seededRand(i * 17 + 5) * 0.6
+  });
+}
+
+// Tree caches
+let trunkCanvas, trunkCtx;
+let canopyCanvas, canopyCtx;
+
+// Animation
+let animFrame = 0;
+let animTimer = 0;
+const ANIM_RATE = 0.12;
+
+// Dialogue usage tracking
+let usedDlg = { spring: [], summer: [], autumn: [], winter: [] };
+
+// Mouse state
+let mouseX = -1, mouseY = -1;
+
+// ============================================================
+// SECTION 8: TIME OF DAY SYSTEM
+// ============================================================
+function getTimeOfDay() {
+  const d = new Date();
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (h >= 5 && h < 7)   return { period: 'dawn', t: (h - 5) / 2 };
+  if (h >= 7 && h < 17)  return { period: 'day',  t: (h - 7) / 10 };
+  if (h >= 17 && h < 19) return { period: 'dusk', t: (h - 17) / 2 };
+  return { period: 'night', t: h >= 19 ? (h - 19) / 10 : (h + 5) / 10 };
+}
+
+function getSkyColors(season, tod) {
+  const cfg = SEASON_CONFIG[season].sky;
+  let top, bot;
+  if (tod.period === 'day') {
+    top = cfg.day[0]; bot = cfg.day[1];
+  } else if (tod.period === 'night') {
+    top = cfg.night[0]; bot = cfg.night[1];
+  } else if (tod.period === 'dawn') {
+    top = lerpColor(cfg.night[0], cfg.dawn[0], tod.t);
+    bot = lerpColor(cfg.night[1], cfg.dawn[1], tod.t);
+    if (tod.t > 0.5) {
+      const t2 = (tod.t - 0.5) * 2;
+      top = lerpColor(top, cfg.day[0], t2);
+      bot = lerpColor(bot, cfg.day[1], t2);
+    }
+  } else {
+    top = lerpColor(cfg.day[0], cfg.dusk[0], tod.t);
+    bot = lerpColor(cfg.day[1], cfg.dusk[1], tod.t);
+    if (tod.t > 0.5) {
+      const t2 = (tod.t - 0.5) * 2;
+      top = lerpColor(top, cfg.night[0], t2);
+      bot = lerpColor(bot, cfg.night[1], t2);
+    }
+  }
+  return { top, bot };
+}
+
+// ============================================================
+// SECTION 9: RENDERING - SKY, STARS, SUN/MOON
+// ============================================================
+function renderSky() {
+  const tod = getTimeOfDay();
+  const { top, bot } = getSkyColors(currentSeason, tod);
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, top);
+  grad.addColorStop(1, bot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (currentWeather === 'rain' || currentWeather === 'cloudy') {
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function renderStars() {
+  const tod = getTimeOfDay();
+  let alpha = 0;
+  if (tod.period === 'night') alpha = 1;
+  else if (tod.period === 'dusk') alpha = Math.max(0, (tod.t - 0.5) * 2);
+  else if (tod.period === 'dawn') alpha = Math.max(0, 1 - tod.t * 2);
+  if (alpha <= 0) return;
+  const t = gameTime;
+  for (const s of stars) {
+    const twinkle = (Math.sin(t * 1.5 + s.phase) + 1) * 0.5;
+    const a = alpha * s.bright * (0.3 + twinkle * 0.7);
+    if (a < 0.1) continue;
+    ctx.globalAlpha = a;
+    drawPixel(s.x, s.y, twinkle > 0.7 ? '#E3F2FD' : '#FFFFFF');
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderSunMoon() {
+  const tod = getTimeOfDay();
+  if (tod.period === 'day' || tod.period === 'dawn' || tod.period === 'dusk') {
+    let progress, alpha;
+    if (tod.period === 'day') { progress = tod.t; alpha = 1; }
+    else if (tod.period === 'dawn') { progress = 0; alpha = tod.t; }
+    else { progress = 1; alpha = 1 - tod.t; }
+    if (alpha > 0.1 && currentWeather !== 'rain' && currentWeather !== 'fog') {
+      const sx = 50 + progress * 380;
+      const sy = 70 - Math.sin(progress * Math.PI) * 45;
+      ctx.globalAlpha = alpha * 0.2;
+      drawRect(sx - 3, sy - 3, 10, 10, '#FFF8E1');
+      ctx.globalAlpha = alpha * 0.4;
+      drawRect(sx - 1, sy - 1, 6, 6, '#FFF176');
+      ctx.globalAlpha = alpha;
+      drawRect(sx, sy, 4, 4, '#FFD54F');
+      drawPixel(sx + 1, sy - 1, '#FFF176');
+      drawPixel(sx + 2, sy - 1, '#FFF176');
+      drawPixel(sx - 1, sy + 1, '#FFF176');
+      drawPixel(sx + 4, sy + 2, '#FFF176');
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (tod.period === 'night' || (tod.period === 'dusk' && tod.t > 0.6) || (tod.period === 'dawn' && tod.t < 0.4)) {
+    let alpha = 1;
+    if (tod.period === 'dusk') alpha = (tod.t - 0.6) * 2.5;
+    if (tod.period === 'dawn') alpha = 1 - tod.t * 2.5;
+    alpha = clamp(alpha, 0, 1);
+    if (alpha > 0.05) {
+      const mp = tod.period === 'night' ? tod.t : (tod.period === 'dusk' ? 0 : 1);
+      const mx = 80 + mp * 320;
+      const my = 50 - Math.sin(mp * Math.PI) * 30;
+      ctx.globalAlpha = alpha * 0.15;
+      drawRect(mx - 2, my - 2, 9, 9, '#E3F2FD');
+      ctx.globalAlpha = alpha;
+      drawRect(mx, my, 5, 5, '#ECEFF1');
+      drawPixel(mx + 1, my, '#CFD8DC');
+      drawPixel(mx, my + 1, '#CFD8DC');
+      ctx.globalAlpha = alpha * 0.6;
+      const { top } = getSkyColors(currentSeason, tod);
+      drawPixel(mx + 3, my, top);
+      drawPixel(mx + 4, my, top);
+      drawPixel(mx + 4, my + 1, top);
+      drawPixel(mx + 4, my + 2, top);
+      drawPixel(mx + 3, my + 4, top);
+      drawPixel(mx + 4, my + 3, top);
+      drawPixel(mx + 4, my + 4, top);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ============================================================
+// SECTION 10: RENDERING - HILLS & GROUND
+// ============================================================
+function renderHills() {
+  const cfg = SEASON_CONFIG[currentSeason];
+  ctx.fillStyle = cfg.hill;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y * scale);
+  for (let x = 0; x <= BASE_W; x++) {
+    const y = GROUND_Y - 8 - Math.sin(x * 0.015 + 1) * 12 - Math.sin(x * 0.008) * 6;
+    ctx.lineTo(x * scale, y * scale);
+  }
+  ctx.lineTo(BASE_W * scale, GROUND_Y * scale);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function renderGround() {
+  const cfg = SEASON_CONFIG[currentSeason];
+  drawRect(0, GROUND_Y, BASE_W, BASE_H - GROUND_Y, cfg.ground);
+  for (let x = 0; x < BASE_W; x += 2) {
+    for (let y = GROUND_Y; y < BASE_H; y += 2) {
+      if (seededRand(x * 53 + y * 97) > 0.6) drawPixel(x, y, cfg.groundAlt);
+    }
+  }
+  if (cfg.grassColors && cfg.grassColors.length > 0) {
+    for (let x = 5; x < BASE_W; x += 4) {
+      const h = 1 + Math.floor(seededRand(x * 37) * 3);
+      const col = cfg.grassColors[Math.floor(seededRand(x * 71) * cfg.grassColors.length)];
+      for (let dy = 0; dy < h; dy++) drawPixel(x, GROUND_Y - 1 - dy, col);
+    }
+  }
+  if (currentSeason === 'winter') {
+    for (let x = 10; x < BASE_W; x += 7) {
+      const w = 2 + Math.floor(seededRand(x * 41) * 4);
+      for (let dx = 0; dx < w; dx++) {
+        drawPixel(x + dx, GROUND_Y - 1, '#F5F5F5');
+        if (seededRand(x * 19 + dx) > 0.5) drawPixel(x + dx, GROUND_Y - 2, '#FAFAFA');
+      }
+    }
+  }
+  const rootCol = SEASON_CONFIG[currentSeason].trunk;
+  drawRect(TREE_CX - 14, GROUND_Y - 1, 5, 2, rootCol);
+  drawRect(TREE_CX + 3, GROUND_Y - 1, 4, 2, rootCol);
+  drawRect(TREE_CX + 11, GROUND_Y - 1, 5, 2, rootCol);
+  drawRect(TREE_CX - 20, GROUND_Y - 1, 3, 1, rootCol);
+  drawRect(TREE_CX + 18, GROUND_Y - 1, 3, 1, rootCol);
+}
+
+// ============================================================
+// SECTION 11: TREE GENERATION & RENDERING
+// ============================================================
+// Spreading, radial branch structure — wide canopy, branches reach far outward
+const CX = TREE_CX, BY = TREE_BRANCH_Y;
+const BRANCH_DEFS = [
+  // === Primary limbs: 5 major branches radiating outward ===
+  [CX, BY, CX - 55, BY - 25, 4],     // far left, slightly up
+  [CX, BY, CX - 30, BY - 40, 4],     // upper left
+  [CX, BY, CX + 3,  BY - 45, 3],     // straight up (central)
+  [CX, BY, CX + 35, BY - 38, 4],     // upper right
+  [CX, BY, CX + 58, BY - 22, 4],     // far right, slightly up
+
+  // === Secondary branches: extend further outward ===
+  // from far-left limb
+  [CX - 55, BY - 25, CX - 85, BY - 35, 3],
+  [CX - 55, BY - 25, CX - 78, BY - 50, 2],
+  [CX - 55, BY - 25, CX - 65, BY - 55, 2],
+  // from upper-left limb
+  [CX - 30, BY - 40, CX - 55, BY - 62, 2],
+  [CX - 30, BY - 40, CX - 40, BY - 68, 2],
+  [CX - 30, BY - 40, CX - 18, BY - 65, 2],
+  // from central limb
+  [CX + 3,  BY - 45, CX - 12, BY - 70, 2],
+  [CX + 3,  BY - 45, CX + 5,  BY - 72, 2],
+  [CX + 3,  BY - 45, CX + 20, BY - 68, 2],
+  // from upper-right limb
+  [CX + 35, BY - 38, CX + 25, BY - 65, 2],
+  [CX + 35, BY - 38, CX + 45, BY - 66, 2],
+  [CX + 35, BY - 38, CX + 60, BY - 58, 2],
+  // from far-right limb
+  [CX + 58, BY - 22, CX + 80, BY - 32, 3],
+  [CX + 58, BY - 22, CX + 82, BY - 48, 2],
+  [CX + 58, BY - 22, CX + 70, BY - 52, 2],
+
+  // === Tertiary twigs: fine tips reaching even further ===
+  [CX - 85, BY - 35, CX - 100, BY - 42, 1],
+  [CX - 85, BY - 35, CX - 95,  BY - 28, 1],
+  [CX - 78, BY - 50, CX - 90,  BY - 60, 1],
+  [CX - 65, BY - 55, CX - 72,  BY - 68, 1],
+  [CX - 55, BY - 62, CX - 65,  BY - 76, 1],
+  [CX - 40, BY - 68, CX - 45,  BY - 80, 1],
+  [CX - 12, BY - 70, CX - 18,  BY - 82, 1],
+  [CX + 5,  BY - 72, CX + 3,   BY - 84, 1],
+  [CX + 20, BY - 68, CX + 25,  BY - 80, 1],
+  [CX + 45, BY - 66, CX + 50,  BY - 78, 1],
+  [CX + 60, BY - 58, CX + 68,  BY - 70, 1],
+  [CX + 80, BY - 32, CX + 95,  BY - 38, 1],
+  [CX + 82, BY - 48, CX + 95,  BY - 58, 1],
+  [CX + 80, BY - 32, CX + 98,  BY - 26, 1],
+  [CX - 18, BY - 65, CX - 25,  BY - 78, 1],
+  [CX + 25, BY - 65, CX + 22,  BY - 78, 1],
+];
+
+function drawLinePixels(cvs, x1, y1, x2, y2, thick, color) {
+  const dx = Math.abs(x2-x1), dy = Math.abs(y2-y1);
+  const sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
+  let err = dx - dy, x = x1, y = y1;
+  const half = Math.floor(thick / 2);
+  const c = cvs.getContext('2d');
+  c.fillStyle = color;
+  for (let iter = 0; iter < 500; iter++) {
+    for (let tx = -half; tx <= half; tx++) {
+      for (let ty = -half; ty <= half; ty++) {
+        if (Math.abs(tx) + Math.abs(ty) <= half + (thick > 2 ? 1 : 0)) {
+          c.fillRect(x + tx, y + ty, 1, 1);
+        }
+      }
+    }
+    if (x === x2 && y === y2) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x += sx; }
+    if (e2 < dx) { err += dx; y += sy; }
+  }
+}
+
+function regenerateTree() {
+  const cfg = SEASON_CONFIG[currentSeason];
+  trunkCanvas = document.createElement('canvas');
+  trunkCanvas.width = BASE_W; trunkCanvas.height = BASE_H;
+  trunkCtx = trunkCanvas.getContext('2d');
+
+  for (let y = TREE_BRANCH_Y; y <= TREE_BASE_Y; y++) {
+    const t = (y - TREE_BRANCH_Y) / (TREE_BASE_Y - TREE_BRANCH_Y);
+    const halfW = Math.floor(3.5 + t * 5.5);
+    for (let dx = -halfW; dx <= halfW; dx++) {
+      const x = TREE_CX + dx;
+      const noise = seededRand(x * 31 + y * 17);
+      let col = cfg.trunk;
+      if (noise > 0.72) col = cfg.trunkAlt;
+      if (dx <= -halfW + 1) col = cfg.trunkDark;
+      trunkCtx.fillStyle = col;
+      trunkCtx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  for (const b of BRANCH_DEFS) {
+    const bColor = seededRand(b[0] * 7 + b[1] * 13) > 0.6 ? cfg.trunkAlt : cfg.trunk;
+    drawLinePixels(trunkCanvas, b[0], b[1], b[2], b[3], b[4], bColor);
+  }
+
+  if (cfg.snowBranch) {
+    for (const b of BRANCH_DEFS) {
+      const dx = b[2] - b[0], dy = b[3] - b[1];
+      const len = Math.sqrt(dx*dx + dy*dy);
+      const steps = Math.floor(len);
+      for (let i = 0; i < steps; i++) {
+        const t = i / steps;
+        const px = Math.floor(b[0] + dx * t);
+        const py = Math.floor(b[1] + dy * t);
+        if (seededRand(px * 41 + py * 73) > 0.35) {
+          trunkCtx.fillStyle = '#F5F5F5';
+          trunkCtx.fillRect(px, py - 1, 1, 1);
+          if (b[4] >= 2) trunkCtx.fillRect(px + 1, py - 1, 1, 1);
+        }
+      }
+    }
+  }
+
+  canopyCanvas = document.createElement('canvas');
+  canopyCanvas.width = BASE_W; canopyCanvas.height = BASE_H;
+  canopyCtx = canopyCanvas.getContext('2d');
+
+  if (cfg.leafDensity > 0) {
+    // Spreading canopy: leaf clusters around each branch endpoint
+    // Gather all branch tips for leaf cluster placement
+    const clusterPoints = [];
+    for (const b of BRANCH_DEFS) {
+      const tipX = b[2], tipY = b[3];
+      const thick = b[4];
+      // Bigger clusters for thicker branches, smaller for twigs
+      const r = thick >= 3 ? 22 : (thick >= 2 ? 16 : 11);
+      clusterPoints.push({ x: tipX, y: tipY, r });
+    }
+    // Add a few extra fill clusters to close gaps in the interior
+    clusterPoints.push({ x: TREE_CX, y: TREE_BRANCH_Y - 55, r: 20 });
+    clusterPoints.push({ x: TREE_CX - 20, y: TREE_BRANCH_Y - 50, r: 18 });
+    clusterPoints.push({ x: TREE_CX + 22, y: TREE_BRANCH_Y - 48, r: 18 });
+    clusterPoints.push({ x: TREE_CX - 45, y: TREE_BRANCH_Y - 40, r: 15 });
+    clusterPoints.push({ x: TREE_CX + 48, y: TREE_BRANCH_Y - 38, r: 15 });
+    clusterPoints.push({ x: TREE_CX - 70, y: TREE_BRANCH_Y - 35, r: 12 });
+    clusterPoints.push({ x: TREE_CX + 72, y: TREE_BRANCH_Y - 33, r: 12 });
+
+    // Determine bounding box for iteration
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const cp of clusterPoints) {
+      minX = Math.min(minX, cp.x - cp.r - 5);
+      maxX = Math.max(maxX, cp.x + cp.r + 5);
+      minY = Math.min(minY, cp.y - cp.r - 5);
+      maxY = Math.max(maxY, cp.y + cp.r + 5);
+    }
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        // Check if this pixel falls inside any leaf cluster
+        let inside = false;
+        for (const cp of clusterPoints) {
+          const dx = (x - cp.x) / cp.r;
+          const dy = (y - cp.y) / (cp.r * 0.75); // flatten vertically for spread look
+          const d = dx * dx + dy * dy;
+          const noise = seededRand(x * 31 + y * 17) * 0.35;
+          const edgeNoise = seededRand(x * 7 + y * 53) * 0.2;
+          if (d + noise + edgeNoise < 1.0) { inside = true; break; }
+        }
+        if (!inside) continue;
+        // Density check
+        if (seededRand(x * 13 + y * 29) >= cfg.leafDensity) continue;
+        canopyCtx.fillStyle = cfg.canopy[Math.floor(seededRand(x * 19 + y * 41) * cfg.canopy.length)];
+        canopyCtx.fillRect(x, y, 1, 1);
+      }
+    }
+
+    // Highlight on top edges of each cluster for volume
+    for (const cp of clusterPoints) {
+      for (let x = cp.x - cp.r + 2; x <= cp.x + cp.r - 2; x++) {
+        const edgeY = cp.y - Math.floor(Math.sqrt(Math.max(0, 1 - ((x - cp.x) / cp.r) ** 2)) * cp.r * 0.75);
+        if (seededRand(x * 67 + cp.y * 11) > 0.55) {
+          canopyCtx.fillStyle = lerpColor(pick(cfg.canopy), '#FFFFFF', 0.3);
+          canopyCtx.fillRect(x, edgeY + 1, 1, 1);
+        }
+      }
+    }
+
+    // Underside shadow on bottom edge of outermost clusters
+    for (const cp of clusterPoints) {
+      for (let x = cp.x - cp.r + 3; x <= cp.x + cp.r - 3; x++) {
+        const botY = cp.y + Math.floor(Math.sqrt(Math.max(0, 1 - ((x - cp.x) / cp.r) ** 2)) * cp.r * 0.75);
+        if (seededRand(x * 43 + cp.y * 7) > 0.6) {
+          canopyCtx.fillStyle = darkenColor(pick(cfg.canopy), 0.25);
+          canopyCtx.fillRect(x, botY - 1, 1, 1);
+        }
+      }
+    }
+
+    // Flowers in spring — scatter across the canopy area
+    if (cfg.hasFlowers) {
+      for (let i = 0; i < 60; i++) {
+        const cp = clusterPoints[Math.floor(seededRand(i * 17) * clusterPoints.length)];
+        const angle = seededRand(i * 23) * Math.PI * 2;
+        const r = seededRand(i * 31) * 0.8;
+        const fx = Math.floor(cp.x + Math.cos(angle) * cp.r * r);
+        const fy = Math.floor(cp.y + Math.sin(angle) * cp.r * 0.75 * r);
+        const fc = seededRand(i * 43) > 0.5 ? cfg.flowers : cfg.flowerAlt;
+        canopyCtx.fillStyle = fc;
+        canopyCtx.fillRect(fx, fy, 1, 1);
+        canopyCtx.fillRect(fx + 1, fy, 1, 1);
+        if (seededRand(i * 59) > 0.5) canopyCtx.fillRect(fx, fy + 1, 1, 1);
+      }
+    }
+  }
+}
+
+function renderTreeTrunk() {
+  ctx.drawImage(trunkCanvas, 0, 0, BASE_W, BASE_H, 0, 0, canvas.width, canvas.height);
+}
+function renderTreeCanopy() {
+  const windOff = currentWeather === 'windy'
+    ? Math.sin(gameTime * 1.2) * 2 * scale
+    : Math.sin(gameTime * 0.3) * 0.5 * scale;
+  ctx.drawImage(canopyCanvas, 0, 0, BASE_W, BASE_H, windOff, 0, canvas.width, canvas.height);
+}
+
+// ============================================================
+// SECTION 12: CLOUD SYSTEM
+// ============================================================
+function generateCloud(w, h) {
+  const cvs = document.createElement('canvas');
+  cvs.width = w; cvs.height = h;
+  const c = cvs.getContext('2d');
+  const circles = [
+    { cx: w * 0.25, cy: h * 0.55, r: h * 0.42 },
+    { cx: w * 0.5,  cy: h * 0.4,  r: h * 0.55 },
+    { cx: w * 0.72, cy: h * 0.52, r: h * 0.38 },
+    { cx: w * 0.38, cy: h * 0.6,  r: h * 0.35 },
+  ];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (const ci of circles) {
+        const dx = x - ci.cx, dy = y - ci.cy;
+        if (dx*dx + dy*dy < ci.r*ci.r) {
+          const bright = 230 + Math.floor(seededRand(x * 7 + y * 13) * 25);
+          c.fillStyle = rgbToHex(bright, bright, bright);
+          c.fillRect(x, y, 1, 1);
+          break;
+        }
+      }
+    }
+  }
+  return cvs;
+}
+
+function initClouds() {
+  clouds = [];
+  const defs = [
+    { w: 28, h: 10, y: 35, speed: 4, alpha: 0.55 },
+    { w: 35, h: 12, y: 55, speed: 3, alpha: 0.5 },
+    { w: 22, h: 8,  y: 75, speed: 5, alpha: 0.45 },
+    { w: 30, h: 11, y: 20, speed: 3.5, alpha: 0.4 },
+  ];
+  for (const d of defs) {
+    clouds.push({
+      sprite: generateCloud(d.w, d.h),
+      x: Math.floor(seededRand(d.y * 31) * BASE_W),
+      y: d.y, w: d.w, h: d.h, speed: d.speed, alpha: d.alpha
+    });
+  }
+}
+
+function updateClouds(dt) {
+  for (const c of clouds) {
+    c.x += c.speed * dt;
+    if (c.x > BASE_W + 10) c.x = -c.w - 5;
+  }
+}
+
+function renderClouds() {
+  const show = currentWeather === 'cloudy' || currentWeather === 'rain' || currentWeather === 'fog';
+  const baseAlpha = show ? 1.0 : 0.3;
+  const tod = getTimeOfDay();
+  const nightFade = (tod.period === 'night') ? 0.3 : 1;
+  for (const c of clouds) {
+    ctx.globalAlpha = c.alpha * baseAlpha * nightFade;
+    ctx.drawImage(c.sprite, 0, 0, c.w, c.h,
+      Math.floor(c.x) * scale, Math.floor(c.y) * scale, c.w * scale, c.h * scale);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// SECTION 13: PARTICLE SYSTEM
+// ============================================================
+function spawnParticle(type) {
+  if (particles.length >= MAX_PARTICLES) return;
+  const p = { type, x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 0, alpha: 1, size: 1,
+              color: '#FFF', angle: 0, angularV: 0, frame: 0 };
+  switch (type) {
+    case 'rain':
+      p.x = Math.random() * (BASE_W + 40) - 20; p.y = -5;
+      p.vx = -25 - Math.random() * 20; p.vy = 200 + Math.random() * 80;
+      p.life = p.maxLife = 2.5; p.color = '#A0C4E8'; p.alpha = 0.65; p.size = 3;
+      break;
+    case 'snow':
+      p.x = Math.random() * (BASE_W + 20) - 10; p.y = -3;
+      p.vy = 18 + Math.random() * 25; p.life = p.maxLife = 12;
+      p.color = '#FFFFFF'; p.alpha = 0.75 + Math.random() * 0.25;
+      p.size = Math.random() > 0.6 ? 2 : 1; p.angle = Math.random() * Math.PI * 2;
+      break;
+    case 'leaf':
+      p.x = TREE_CX - 100 + Math.random() * 200;
+      p.y = TREE_BRANCH_Y - 75 + Math.random() * 50;
+      p.vy = 25 + Math.random() * 25; p.life = p.maxLife = 6;
+      p.color = pick(['#E65100','#F57C00','#FFB300','#D84315','#FF8F00']);
+      p.alpha = 0.9; p.size = 2;
+      p.angle = Math.random() * Math.PI * 2; p.angularV = 1.5 + Math.random() * 2;
+      break;
+    case 'petal':
+      p.x = TREE_CX - 95 + Math.random() * 190;
+      p.y = TREE_BRANCH_Y - 70 + Math.random() * 40;
+      p.vy = 12 + Math.random() * 15; p.life = p.maxLife = 7;
+      p.color = Math.random() > 0.5 ? '#F8BBD0' : '#F48FB1';
+      p.alpha = 0.8; p.size = 2; p.angle = Math.random() * Math.PI * 2;
+      break;
+    case 'splash':
+      p.life = p.maxLife = 0.3; p.alpha = 0.5;
+      p.color = '#B0D4F1'; p.size = 1; p.vy = -15; p.vx = (Math.random() - 0.5) * 20;
+      break;
+  }
+  particles.push(p);
+}
+
+function updateParticles(dt) {
+  const windExtra = currentWeather === 'windy' ? 40 : 0;
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0 || p.y > BASE_H + 10 || p.x < -20 || p.x > BASE_W + 20) {
+      particles.splice(i, 1); continue;
+    }
+    if (p.type === 'snow') p.vx = Math.sin(gameTime * 2 + p.angle) * 15 + windExtra * 0.3;
+    else if (p.type === 'leaf') { p.vx = Math.sin(gameTime * 1.5 + p.angle) * 30 + windExtra * 0.5; p.angle += p.angularV * dt; }
+    else if (p.type === 'petal') p.vx = Math.sin(gameTime * 1.2 + p.angle) * 18 + windExtra * 0.4;
+    else if (p.type === 'rain') p.vx += windExtra * 0.3 * dt;
+
+    p.x += (p.vx + windExtra * 0.1) * dt;
+    p.y += p.vy * dt;
+
+    if (p.type === 'rain' && p.y >= GROUND_Y) {
+      if (particles.length < MAX_PARTICLES) {
+        particles.push({ type: 'splash', x: p.x, y: GROUND_Y - 1, vx: 0, vy: -15,
+          life: 0.25, maxLife: 0.25, alpha: 0.4, color: '#B0D4F1', size: 1,
+          angle: 0, angularV: 0, frame: 0 });
+      }
+      particles.splice(i, 1);
+    }
+  }
+  if (currentWeather === 'rain') { for (let i = 0; i < 4; i++) spawnParticle('rain'); }
+  else if (currentWeather === 'snow') { if (Math.random() < 0.35) spawnParticle('snow'); }
+  const cfg = SEASON_CONFIG[currentSeason];
+  if (cfg.particle === 'leaves' && Math.random() < 0.04) spawnParticle('leaf');
+  if (cfg.particle === 'petals' && Math.random() < 0.025) spawnParticle('petal');
+  if (currentWeather === 'windy' && Math.random() < 0.06) spawnParticle('leaf');
+}
+
+function renderParticles(behindCanopy) {
+  for (const p of particles) {
+    const isBehind = p.type === 'rain' && p.y < TREE_BRANCH_Y - 10;
+    if (behindCanopy !== isBehind) continue;
+    const fadeIn = clamp(1 - p.life / p.maxLife, 0, 1);
+    const fadeOut = clamp(p.life / 0.3, 0, 1);
+    ctx.globalAlpha = p.alpha * Math.min(fadeIn * 5, fadeOut);
+    if (p.type === 'rain') {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(Math.floor(p.x) * scale, Math.floor(p.y) * scale, scale, p.size * scale);
+    } else if (p.type === 'splash') {
+      drawPixel(p.x, p.y, p.color);
+      drawPixel(p.x - 1, p.y, p.color);
+      drawPixel(p.x + 1, p.y, p.color);
+    } else if (p.type === 'leaf') {
+      const phase = Math.floor(p.angle * 2 / Math.PI) % 4;
+      ctx.fillStyle = p.color;
+      if (phase === 0 || phase === 2) ctx.fillRect(Math.floor(p.x) * scale, Math.floor(p.y) * scale, 2 * scale, 2 * scale);
+      else ctx.fillRect(Math.floor(p.x) * scale, Math.floor(p.y) * scale, 3 * scale, scale);
+    } else if (p.type === 'petal') {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(Math.floor(p.x) * scale, Math.floor(p.y) * scale, 2 * scale, scale);
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(Math.floor(p.x) * scale, Math.floor(p.y) * scale, p.size * scale, p.size * scale);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderSunshine() {
+  const tod = getTimeOfDay();
+  if (tod.period !== 'day' || currentWeather !== 'clear') return;
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = '#FFF8E1';
+  ctx.lineWidth = 2 * scale;
+  const baseX = 350 + Math.sin(gameTime * 0.3) * 20;
+  for (let i = 0; i < 5; i++) {
+    const x = baseX + i * 25;
+    ctx.beginPath();
+    ctx.moveTo(x * scale, 0);
+    ctx.lineTo((x - 120) * scale, BASE_H * scale);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderFog() {
+  if (currentWeather !== 'fog') return;
+  const pulse = 0.18 + Math.sin(gameTime * 0.8) * 0.08;
+  ctx.fillStyle = `rgba(210, 215, 220, ${pulse})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(200, 210, 215, 0.12)';
+  for (let i = 0; i < 3; i++) {
+    const fx = ((gameTime * 6 + i * 180) % (BASE_W + 100)) - 50;
+    const fy = 180 + i * 30 + Math.sin(gameTime * 0.5 + i) * 10;
+    ctx.beginPath();
+    ctx.ellipse(fx * scale, fy * scale, 60 * scale, 15 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ============================================================
+// SECTION 14: DUAL ANIMAL SYSTEM
+// ============================================================
+// Left animal rests to the left of tree, right animal to the right
+const ANIMAL_REST = {
+  bird:      { left: { x: 165, y: 193 }, right: { x: 310, y: 190 } },
+  butterfly: { left: { x: 150, y: 248 }, right: { x: 320, y: 248 } },
+  squirrel:  { left: { x: 160, y: GROUND_Y - 12 }, right: { x: 310, y: GROUND_Y - 12 } },
+  rabbit:    { left: { x: 155, y: GROUND_Y - 11 }, right: { x: 315, y: GROUND_Y - 11 } }
+};
+
+const ANIMAL_SPEEDS = { bird: 65, butterfly: 32, squirrel: 85, rabbit: 55 };
+
+function createAnimalPair(type) {
+  const restL = ANIMAL_REST[type].left;
+  const restR = ANIMAL_REST[type].right;
+
+  const left = {
+    type, spriteKey: type,
+    x: -20, y: type === 'bird' ? restL.y - 5 : (type === 'butterfly' ? restL.y - 15 : GROUND_Y - 10),
+    targetX: restL.x, targetY: restL.y,
+    exitX: -30, exitY: type === 'bird' ? restL.y - 30 : (type === 'butterfly' ? -20 : GROUND_Y - 10),
+    state: 'entering', dir: 1, animFrame: 0,
+    speed: ANIMAL_SPEEDS[type], hopTimer: 0, hopPhase: 0, bobOffset: 0
+  };
+
+  const right = {
+    type, spriteKey: type + '_b',
+    x: BASE_W + 20, y: type === 'bird' ? restR.y - 5 : (type === 'butterfly' ? restR.y - 15 : GROUND_Y - 10),
+    targetX: restR.x, targetY: restR.y,
+    exitX: BASE_W + 30, exitY: type === 'bird' ? restR.y - 30 : (type === 'butterfly' ? -20 : GROUND_Y - 10),
+    state: 'entering', dir: -1, animFrame: 0,
+    speed: ANIMAL_SPEEDS[type], hopTimer: 0, hopPhase: 0, bobOffset: 0
+  };
+
+  return { left, right };
+}
+
+function updateSingleAnimal(a, dt) {
+  if (!a) return;
+  if (a.state === 'entering') {
+    const dx = a.targetX - a.x, dy = a.targetY - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 2) {
+      a.x = a.targetX; a.y = a.targetY; a.state = 'idle';
+      a.dir = a.x < TREE_CX ? 1 : -1;
+      return;
+    }
+    const spd = a.speed * dt;
+    a.x += (dx / dist) * spd;
+    if (a.type === 'bird') a.y += (dy / dist) * spd + Math.sin(gameTime * 5 + a.x * 0.1) * 0.8;
+    else if (a.type === 'butterfly') { a.y += (dy / dist) * spd + Math.sin(gameTime * 4 + a.x * 0.15) * 1.2; a.x += Math.sin(gameTime * 3) * 0.5; }
+    else if (a.type === 'rabbit') {
+      a.hopTimer += dt;
+      if (a.hopTimer >= 0.4) { a.hopTimer = 0; a.hopPhase = 1; }
+      if (a.hopPhase > 0) { a.hopPhase -= dt * 4; a.bobOffset = -Math.sin(a.hopPhase * Math.PI) * 8; }
+      else a.bobOffset = 0;
+      a.y = a.targetY - Math.abs(a.bobOffset);
+    } else a.y += (dy / dist) * spd;
+  } else if (a.state === 'leaving') {
+    const dx = a.exitX - a.x, dy = a.exitY - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const spd = a.speed * 1.1 * dt;
+    a.x += (dx / Math.max(1, dist)) * spd;
+    if (a.type === 'bird') a.y += (dy / Math.max(1, dist)) * spd * 0.6 + Math.sin(gameTime * 5) * 0.6;
+    else if (a.type === 'butterfly') a.y += (dy / Math.max(1, dist)) * spd * 0.5 + Math.sin(gameTime * 4) * 1;
+    else if (a.type === 'rabbit') {
+      a.hopTimer += dt;
+      if (a.hopTimer >= 0.35) { a.hopTimer = 0; a.hopPhase = 1; }
+      if (a.hopPhase > 0) { a.hopPhase -= dt * 4; a.bobOffset = -Math.sin(a.hopPhase * Math.PI) * 7; }
+      else a.bobOffset = 0;
+      a.y = GROUND_Y - 10 - Math.abs(a.bobOffset);
+    } else a.y += (dy / Math.max(1, dist)) * spd;
+  } else {
+    if (a.type === 'butterfly') a.bobOffset = Math.sin(gameTime * 2) * 1.5;
+    else if (a.type === 'bird') a.bobOffset = Math.sin(gameTime * 1.5) * 0.5;
+  }
+}
+
+function updateAnimals(dt) {
+  updateSingleAnimal(animalLeft, dt);
+  updateSingleAnimal(animalRight, dt);
+}
+
+function bothAnimalsIdle() {
+  return animalLeft && animalRight && animalLeft.state === 'idle' && animalRight.state === 'idle';
+}
+
+function bothAnimalsOffScreen() {
+  const offL = !animalLeft || animalLeft.x < -25 || animalLeft.x > BASE_W + 25 || animalLeft.y < -25;
+  const offR = !animalRight || animalRight.x < -25 || animalRight.x > BASE_W + 25 || animalRight.y < -25;
+  return offL && offR;
+}
+
+function renderSingleAnimal(a) {
+  if (!a) return;
+  const sp = SP[a.spriteKey];
+  if (!sp) return;
+  const isMoving = a.state === 'entering' || a.state === 'leaving';
+  const frames = isMoving ? sp.move : sp.idle;
+  const frame = frames[animFrame % frames.length];
+  const flipH = a.dir < 0;
+  const drawY = a.y + (a.bobOffset || 0);
+  drawSprite(frame, Math.floor(a.x), Math.floor(drawY), flipH);
+}
+
+function renderAnimals() {
+  renderSingleAnimal(animalLeft);
+  renderSingleAnimal(animalRight);
+}
+
+// ============================================================
+// SECTION 15: CHAT BUBBLE SYSTEM
+// ============================================================
+function createBubble(text, anchorX, anchorY, type, side) {
+  // type: 'speech' or 'thought'; side: 'left','right','center'
+  return {
+    text, chars: [...text], anchorX, anchorY, type, side,
+    state: 'typing', visibleChars: 0, typeSpeed: 10,
+    displayTime: 3.5, timer: 0, fadeAlpha: 1
+  };
+}
+
+function updateBubble(dt) {
+  if (!activeBubble) return;
+  const b = activeBubble;
+  b.timer += dt;
+  if (b.state === 'typing') {
+    b.visibleChars = Math.floor(b.timer * b.typeSpeed);
+    if (b.visibleChars >= b.chars.length) {
+      b.visibleChars = b.chars.length; b.state = 'visible'; b.timer = 0;
+    }
+  } else if (b.state === 'visible') {
+    if (b.timer >= b.displayTime) { b.state = 'fading'; b.timer = 0; }
+  } else if (b.state === 'fading') {
+    b.fadeAlpha = Math.max(0, 1 - b.timer / 0.5);
+  }
+}
+
+function isBubbleDone() {
+  return activeBubble && activeBubble.state === 'fading' && activeBubble.fadeAlpha <= 0;
+}
+
+function renderBubbles() {
+  if (!activeBubble) return;
+  const b = activeBubble;
+  const fontSize = 10;
+  const padding = 5;
+  const maxTextW = 120;
+  const lineH = fontSize + 3;
+
+  ctx.font = `${fontSize * scale}px Zpix, SimSun, "Microsoft YaHei", monospace`;
+  const visibleText = b.chars.slice(0, b.visibleChars).join('');
+
+  const lines = [];
+  let line = '';
+  for (const ch of [...visibleText]) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxTextW * scale) { lines.push(line); line = ch; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  if (lines.length === 0) lines.push('');
+
+  let maxW = 0;
+  for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width / scale);
+
+  const bubW = Math.floor(maxW + padding * 2 + 2);
+  const bubH = Math.floor(lines.length * lineH + padding * 2);
+
+  let bx = Math.floor(b.anchorX - bubW / 2);
+  let by = Math.floor(b.anchorY - bubH - 12);
+  bx = clamp(bx, 4, BASE_W - bubW - 4);
+  by = clamp(by, 4, BASE_H - bubH - 20);
+
+  ctx.globalAlpha = b.fadeAlpha;
+
+  const bgColor = b.type === 'thought' ? '#FFF8E1' : '#FFFFFF';
+  const borderColor = b.type === 'thought' ? '#9E9E9E' : '#424242';
+
+  drawRect(bx - 1, by - 1, bubW + 2, bubH + 2, borderColor);
+  drawRect(bx, by, bubW, bubH, bgColor);
+
+  if (b.type === 'speech') {
+    const px = clamp(Math.floor(b.anchorX), bx + 4, bx + bubW - 4);
+    drawRect(px - 2, by + bubH, 5, 1, borderColor);
+    drawRect(px - 1, by + bubH + 1, 3, 1, borderColor);
+    drawPixel(px, by + bubH + 2, borderColor);
+    drawRect(px - 1, by + bubH, 3, 1, bgColor);
+    drawPixel(px, by + bubH + 1, bgColor);
+  } else {
+    // Tree thought: dots going up to canopy center
+    const tx = Math.floor(b.anchorX);
+    drawRect(tx - 1, by + bubH + 2, 3, 3, borderColor);
+    drawRect(tx, by + bubH + 3, 1, 1, bgColor);
+    drawRect(tx + 2, by + bubH + 6, 2, 2, borderColor);
+    drawPixel(tx + 4, by + bubH + 9, borderColor);
+  }
+
+  ctx.fillStyle = '#333';
+  ctx.textBaseline = 'top';
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], (bx + padding) * scale, (by + padding + i * lineH) * scale);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// SECTION 16: STATE MACHINE & SCHEDULER (dual-animal)
+// ============================================================
+function getTimings() { return isDemo ? TIMINGS.demo : TIMINGS.normal; }
+
+function pickDialogueSet() {
+  const sets = DIALOGUE[currentSeason];
+  const avail = sets.map((_, i) => i).filter(i => !usedDlg[currentSeason].includes(i));
+  if (avail.length === 0) { usedDlg[currentSeason] = []; return pick(sets); }
+  const idx = pick(avail);
+  usedDlg[currentSeason].push(idx);
+  return sets[idx];
+}
+
+function getBubbleAnchor(speakerIdx) {
+  // 0 = left animal, 1 = right animal
+  const a = speakerIdx === 0 ? animalLeft : animalRight;
+  if (!a) return { x: TREE_CX, y: GROUND_Y - 30 };
+  return { x: a.x + 6, y: a.y - 2 };
+}
+
+function showDialogueLine(entry) {
+  // entry = [speakerIdx, text]
+  const [speaker, text] = entry;
+  const anchor = getBubbleAnchor(speaker);
+  activeBubble = createBubble(text, anchor.x, anchor.y, 'speech', speaker === 0 ? 'left' : 'right');
+}
+
+// States: QUIET -> ANIMAL_ENTER -> GREET -> GREET_REPLY -> CHAT -> BYE -> BYE_REPLY -> ANIMAL_EXIT -> TREE_THINK -> COOLDOWN -> QUIET
+function transitionTo(state) {
+  smState = state;
+  smTimer = 0;
+
+  switch (state) {
+    case 'ANIMAL_ENTER': {
+      const type = SEASON_ANIMALS[currentSeason];
+      const pair = createAnimalPair(type);
+      animalLeft = pair.left;
+      animalRight = pair.right;
+      chatIdx = 0;
+      activeBubble = null;
+      currentNewsTopics = '';
+
+      // Pop dialogue from cache (instant!) or fall back to mock
+      if (llmCache.length > 0 && llmCacheSeason === currentSeason) {
+        currentDlg = llmCache.shift();
+        currentNewsTopics = currentDlg.newsTopics || '';
+        console.log('[Dialogue] Using cached LLM data:', currentNewsTopics);
+      } else {
+        currentDlg = pickDialogueSet();
+        console.log('[Dialogue] Cache empty, using mock data');
+      }
+      break;
+    }
+    case 'GREET':
+      showDialogueLine(currentDlg.greet);
+      break;
+    case 'GREET_REPLY':
+      showDialogueLine(currentDlg.greetReply);
+      break;
+    case 'CHAT':
+      chatIdx = 0;
+      showDialogueLine(currentDlg.chat[0]);
+      break;
+    case 'BYE':
+      showDialogueLine(currentDlg.bye);
+      // Start fetching tree summary while animals say goodbye
+      llmSummaryText = '';
+      if (LLM_CONFIG.apiKey && currentNewsTopics) {
+        fetchTreeSummary(currentNewsTopics).then(text => {
+          llmSummaryText = text;
+          console.log('[Summary] Ready:', text);
+        }).catch(e => {
+          console.warn('[Summary] Failed:', e.message);
+        });
+      }
+      break;
+    case 'BYE_REPLY':
+      showDialogueLine(currentDlg.byeReply);
+      break;
+    case 'ANIMAL_EXIT':
+      if (animalLeft) { animalLeft.state = 'leaving'; animalLeft.dir = -1; }
+      if (animalRight) { animalRight.state = 'leaving'; animalRight.dir = 1; }
+      activeBubble = null;
+      break;
+    case 'TREE_THINK': {
+      const summary = llmSummaryText || currentDlg.think || '……';
+      activeBubble = createBubble(summary, TREE_CX, TREE_BRANCH_Y - 80, 'thought', 'center');
+      animalLeft = null;
+      animalRight = null;
+      break;
+    }
+    case 'COOLDOWN':
+      activeBubble = null;
+      break;
+    case 'QUIET':
+      animalLeft = null;
+      animalRight = null;
+      currentDlg = null;
+      activeBubble = null;
+      break;
+  }
+}
+
+function updateStateMachine(dt) {
+  smTimer += dt;
+  const T = getTimings();
+
+  switch (smState) {
+    case 'QUIET':
+      if (smTimer >= T.quiet) transitionTo('ANIMAL_ENTER');
+      break;
+    case 'ANIMAL_ENTER':
+      if (bothAnimalsIdle()) transitionTo('GREET');
+      break;
+    case 'GREET':
+      if (isBubbleDone()) transitionTo('GREET_REPLY');
+      break;
+    case 'GREET_REPLY':
+      if (isBubbleDone()) transitionTo('CHAT');
+      break;
+    case 'CHAT':
+      if (isBubbleDone()) {
+        chatIdx++;
+        if (chatIdx >= currentDlg.chat.length) {
+          transitionTo('BYE');
+        } else {
+          showDialogueLine(currentDlg.chat[chatIdx]);
+        }
+      }
+      break;
+    case 'BYE':
+      if (isBubbleDone()) transitionTo('BYE_REPLY');
+      break;
+    case 'BYE_REPLY':
+      if (isBubbleDone()) transitionTo('ANIMAL_EXIT');
+      break;
+    case 'ANIMAL_EXIT':
+      if (bothAnimalsOffScreen()) transitionTo('TREE_THINK');
+      break;
+    case 'TREE_THINK':
+      if (isBubbleDone()) transitionTo('COOLDOWN');
+      break;
+    case 'COOLDOWN':
+      if (smTimer >= T.cooldown) transitionTo('QUIET');
+      break;
+  }
+}
+
+// ============================================================
+// SECTION 17: DEMO UI
+// ============================================================
+const UI_BTNS = [
+  { id: 'demo', x: BASE_W - 62, y: BASE_H - 58, w: 55, h: 12,
+    label: () => isDemo ? 'Demo: ON' : 'Demo: OFF',
+    action: () => {
+      isDemo = !isDemo;
+      if (isDemo && smState === 'QUIET') smTimer = Math.max(smTimer, getTimings().quiet - 5);
+    }
+  },
+  { id: 'season', x: BASE_W - 62, y: BASE_H - 44, w: 55, h: 12,
+    label: () => ({ spring:'Spring', summer:'Summer', autumn:'Autumn', winter:'Winter' })[currentSeason],
+    action: () => {
+      currentSeason = SEASON_LIST[(SEASON_LIST.indexOf(currentSeason) + 1) % 4];
+      seasonOverride = true; regenerateTree(); particles = [];
+    }
+  },
+  { id: 'weather', x: BASE_W - 62, y: BASE_H - 30, w: 55, h: 12,
+    label: () => ({ clear:'Clear', cloudy:'Cloudy', rain:'Rain', snow:'Snow', fog:'Fog', windy:'Windy' })[currentWeather],
+    action: () => {
+      currentWeather = WEATHER_LIST[(WEATHER_LIST.indexOf(currentWeather) + 1) % WEATHER_LIST.length];
+      particles = [];
+    }
+  },
+  { id: 'summon', x: BASE_W - 62, y: BASE_H - 16, w: 55, h: 12,
+    label: () => 'Summon!',
+    action: () => {
+      if (smState === 'QUIET' || smState === 'COOLDOWN') transitionTo('ANIMAL_ENTER');
+    }
+  }
+];
+
+function renderUI() {
+  const fontSize = 8;
+  ctx.font = `${fontSize * scale}px Zpix, monospace`;
+  ctx.textBaseline = 'middle';
+
+  for (const btn of UI_BTNS) {
+    const hover = mouseX >= btn.x && mouseX <= btn.x + btn.w &&
+                  mouseY >= btn.y && mouseY <= btn.y + btn.h;
+    drawRect(btn.x - 1, btn.y - 1, btn.w + 2, btn.h + 2, '#666666');
+    drawRect(btn.x, btn.y, btn.w, btn.h, hover ? '#555555' : '#333333');
+    ctx.fillStyle = hover ? '#FFFFFF' : '#CCCCCC';
+    const label = btn.label();
+    const tw = ctx.measureText(label).width;
+    ctx.fillText(label, (btn.x + (btn.w * scale - tw) / scale / 2) * scale, (btn.y + btn.h / 2) * scale);
+  }
+
+  if (isDemo) {
+    ctx.globalAlpha = 0.5 + Math.sin(gameTime * 3) * 0.3;
+    ctx.font = `${8 * scale}px Zpix, monospace`;
+    ctx.fillStyle = '#FF5252';
+    ctx.textBaseline = 'top';
+    ctx.fillText('DEMO', 6 * scale, 6 * scale);
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.globalAlpha = 0.35;
+  ctx.font = `${7 * scale}px Zpix, monospace`;
+  ctx.fillStyle = '#FFF';
+  ctx.textBaseline = 'top';
+  const stateNames = {
+    QUIET: 'Waiting...', ANIMAL_ENTER: 'Coming...',
+    GREET: 'Hello!', GREET_REPLY: 'Hello!',
+    CHAT: 'Chatting', BYE: 'Goodbye', BYE_REPLY: 'Goodbye',
+    ANIMAL_EXIT: 'Leaving...', TREE_THINK: 'Thinking...', COOLDOWN: '...'
+  };
+  let statusLabel = stateNames[smState] || smState;
+  const remaining = smState === 'QUIET' ? ` (${Math.max(0, Math.floor(getTimings().quiet - smTimer))}s)` : '';
+  // Show LLM cache status
+  const cacheInfo = LLM_CONFIG.apiKey ? ` [${llmCache.length}/${LLM_CACHE_MAX}]` : '';
+  if (llmBusy) {
+    const dots = '.'.repeat(1 + Math.floor(gameTime * 2) % 3);
+    statusLabel = 'Caching' + dots + cacheInfo;
+  } else if (smState === 'QUIET' || smState === 'COOLDOWN') {
+    statusLabel += remaining + cacheInfo;
+  } else {
+    statusLabel += remaining;
+  }
+  ctx.fillText(statusLabel, 6 * scale, (isDemo ? 18 : 6) * scale);
+  ctx.globalAlpha = 1;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = (e.clientX - rect.left) / scale;
+  mouseY = (e.clientY - rect.top) / scale;
+});
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) / scale;
+  const my = (e.clientY - rect.top) / scale;
+  for (const btn of UI_BTNS) {
+    if (mx >= btn.x && mx <= btn.x + btn.w && my >= btn.y && my <= btn.y + btn.h) {
+      btn.action(); break;
+    }
+  }
+});
+canvas.addEventListener('mouseleave', () => { mouseX = mouseY = -1; });
+
+// ============================================================
+// SECTION 18: SEASON AUTO-DETECTION
+// ============================================================
+function detectSeason() {
+  if (seasonOverride) return;
+  const m = new Date().getMonth();
+  if (m >= 2 && m <= 4) currentSeason = 'spring';
+  else if (m >= 5 && m <= 7) currentSeason = 'summer';
+  else if (m >= 8 && m <= 10) currentSeason = 'autumn';
+  else currentSeason = 'winter';
+}
+
+// ============================================================
+// SECTION 19: TREE GLOW EFFECT (during TREE_THINK)
+// ============================================================
+function renderTreeGlow() {
+  if (smState !== 'TREE_THINK') return;
+  const pulse = 0.06 + Math.sin(gameTime * 2) * 0.04;
+  const cx = TREE_CX, cy = TREE_BRANCH_Y - 45;
+  const rx = 100, ry = 45;
+  ctx.globalAlpha = pulse;
+  ctx.fillStyle = currentSeason === 'winter' ? '#E3F2FD' : '#FFF8E1';
+  ctx.beginPath();
+  ctx.ellipse(cx * scale, cy * scale, rx * scale, ry * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// SECTION 20: MAIN LOOP & INITIALIZATION
+// ============================================================
+let lastTime = 0;
+
+function gameLoop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+  lastTime = timestamp;
+  gameTime += dt;
+
+  animTimer += dt;
+  if (animTimer >= ANIM_RATE) { animTimer -= ANIM_RATE; animFrame++; }
+
+  // Periodic weather fetch via LLM (every hour)
+  if (LLM_CONFIG.apiKey && gameTime - lastWeatherFetch > 3600) {
+    lastWeatherFetch = gameTime;
+    fetchWeather();
+  }
+
+  // Pre-fetch LLM dialogues during idle time
+  updateLLMCache();
+
+  // Updates
+  updateClouds(dt);
+  updateParticles(dt);
+  updateAnimals(dt);
+  updateBubble(dt);
+  updateStateMachine(dt);
+
+  // --- Render ---
+  renderSky();
+  renderStars();
+  renderSunMoon();
+  renderSunshine();
+  renderClouds();
+  renderHills();
+  renderGround();
+  renderTreeTrunk();
+  renderParticles(true);
+  renderTreeCanopy();
+  renderTreeGlow();
+  renderParticles(false);
+  renderAnimals();
+  renderBubbles();
+  renderFog();
+  renderUI();
+
+  requestAnimationFrame(gameLoop);
+}
+
+function init() {
+  calcScale();
+  initSprites();
+  detectSeason();
+  regenerateTree();
+  initClouds();
+  smState = 'QUIET';
+  smTimer = 0;
+
+  // Initial weather fetch via LLM
+  if (LLM_CONFIG.apiKey) {
+    lastWeatherFetch = 0;
+    fetchWeather().then(() => {
+      console.log('[Init] Weather loaded');
+    });
+    // Start caching dialogues immediately
+    llmLastFetchTime = -9999; // allow immediate first fetch
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
